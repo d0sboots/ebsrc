@@ -1114,3 +1114,5 @@ LOCALEINCLUDE "flyovers.symbols.asm"
 .INCLUDE "audio/set_num_channels.asm"
 
 .INCLUDE "overworld/set_auto_sector_music_changes.asm"
+
+.INCLUDE "system/decomp_table.asm"

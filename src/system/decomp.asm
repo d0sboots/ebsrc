@@ -38,43 +38,12 @@
 .DEFINE MVN_DST_BANK $4316
 .DEFINE MVN_JMP $4318
 .DEFINE MVN_JMP_ADDR $4319
-	PHD
-	PHB
-	SEP #PROC_FLAGS::ACCUM8
-	LDA z:$10
-	PHA
-	STA f:DATA_SRC_BANK
-; We can't set D just yet, but we push this value so that we can
-; pull it into D without disturbing X later.
-	LDX #DMA_BASE
-	PHX
-	LDX z:$0E
-	LDY z:$12
-	LDA z:$14
-; From here on we use direct addressing to access our locals, because
-; we don't need to worry about the passed-in values.
-	PLD
-	STX z:<FAST_TMP
-	STY z:<DATA_DST_ORIG
-	STA z:<DATA_DST+2
-; By default, all MVNs will copy within the same bank. Only literals need
-; to copy from the source address bank.
-	STA z:<MVN_SRC_BANK
-	STA z:<MVN_DST_BANK
-	LDA #$54  ; MVN
-	STA z:<MVN_ADDR
-; This needs to be a far jmp, because $C4 has no access to the io ports.
-	LDA #$5C  ; JML
-	STA z:<MVN_JMP
-	LDA #^LOOP
-	STA z:<MVN_JMP_ADDR+2
-	REP #PROC_FLAGS::ACCUM8
-; The compiler/linker seems to be unable to comprehend 16-bit labels that
-; aren't declared yet, so annoying hacks are needed?
-	LDA #(<LOOP | >LOOP << 8)
-	STA z:<MVN_JMP_ADDR
-	STZ z:<DATA_DST
-LOOP:
+; Because our routine is slightly larger than the original, we hoist the init
+; code elsewhere and only have the main loop here. This costs an extra
+; 6 cycles/call, which is tiny.
+	JMP a:DECOMP_ENTRY
+DECOMP_LOOP:
+.GLOBAL DECOMP_LOOP
 	SEP #PROC_FLAGS::ACCUM8
 LOOP_NO_SEP:
 ; We store the value of X here before calling MVN, because for most operations
@@ -154,7 +123,7 @@ RLE8_NORMAL:
 	REP #PROC_FLAGS::ACCUM8
 	LDA z:<DATA_LEN
 ; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
-	BEQ LOOP
+	BEQ DECOMP_LOOP
 	BCC RLE8_ASL_SKIP
 	ASL
 RLE8_ASL_SKIP:
@@ -173,7 +142,7 @@ LITERAL:
 	LDA z:<DATA_LEN
 	JML MVN_ADDR
 LITERAL_CLEANUP:
-	LDA #(<LOOP | >LOOP << 8)
+	LDA #(<DECOMP_LOOP | >DECOMP_LOOP << 8)
 	STA z:<MVN_JMP_ADDR
 	SEP #PROC_FLAGS::ACCUM8
 	LDA z:<DATA_DST+2
@@ -237,33 +206,28 @@ BREF:
 	JML MVN_ADDR
 BREF_ROT:
 .A8
+; Steal DATA_DST to do indirect reads from our table
+	LDA #^DECOMP_REV_TABLE
+	STA z:<DATA_DST+2
+	LDA #>DECOMP_REV_TABLE
+	STA z:<DATA_DST+1
+BREF_ROT_LOOP:
 	LDA a:$00,X
-	INX
-	STA z:<FAST_CMD
-	ASL z:<FAST_CMD
-	ROR
-	ASL z:<FAST_CMD
-	ROR
-	ASL z:<FAST_CMD
-	ROR
-	ASL z:<FAST_CMD
-	ROR
-	ASL z:<FAST_CMD
-	ROR
-	ASL z:<FAST_CMD
-	ROR
-	ASL z:<FAST_CMD
-	ROR
-	ASL z:<FAST_CMD
-	ROR
+	STA z:<DATA_DST
+	LDA [<DATA_DST]
 	STA a:$00,Y
+	INX
 ; We compare vs the preincrement value, because DATA_LEN is storing the last
 ; address instead of one-past-the-end. But we can't use the z flag, because
 ; INY overwrites it - so we use c instead, which switches from 0 to 1 once Y
 ; equals DATA_LEN.
 	CPY z:<DATA_LEN
 	INY
-	BCC BREF_ROT
+	BCC BREF_ROT_LOOP
+	STZ z:<DATA_DST
+	STZ z:<DATA_DST+1
+	LDA z:<MVN_DST_BANK
+	STA z:<DATA_DST+2
 	JMP LOOP_NO_SEP
 BREF_REV:
 	LDA a:$00,X
@@ -274,6 +238,9 @@ BREF_REV:
 	BCC BREF_REV
 	JMP LOOP_NO_SEP
 .ENDPROC
+
+; Space out the function so that other functions end in the same spots
+.RES $23
 
 ; Not actually decomp at all
 DECOMP_ENTRY2:
