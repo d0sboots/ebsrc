@@ -1,191 +1,281 @@
-
-DECOMP:
-	LDA $0E
-	STA DECOMP_DATA_SRC
-	LDA $10
-	STA DECOMP_DATA_SRC+2
-	LDX $12
-	STX DECOMP_DEST_BUFFER
+; Inputs
+; long data_src at $0E
+; long data_dst at $12
+; $11 and $15 are #00 since addresses are 24 bits
+;
+; Extra calling conventions:
+; A/X/Y are ignored
+; m and x flags must be 0, callee-saved
+; DBR must be $7E (or at least something with access to Low RAM), callee-saved
+.PROC DECOMP
+; The general convention in this function is to use X as source address
+; and Y as destination address, since this lines up with how MVN works.
+; Because of asymmetric addressing modes, this means using DBR + #$0000, X
+; for source and [<DATA_DST], Y for destination, where the memory at DATA_DST
+; is only actually used for the bank, and the two lower bytes are 0.
+;
+; This is a little inconvenient, because MVN sets DBR to the *destination*
+; bank, and we need it to be the source. But we can solve this with a little
+; push/pull in a judicious place.
+;
+; We use the DMA1 registers for fastrom local storage.
+; The nature of how DMA is used in earthbound guarantees DMA0 and DMA1 won't
+; be used for HDMA. DMA0 is used in the NMI handler, so we can't rely on
+; any registers there that are used for normal DMA transfers. DMA1 and the
+; unused byte in other DMA channels should be safe.
+;
+; The code layout is a tangled zig-zag of blocks, set up to allow branch
+; targets to work in one byte rather than read clearly.
+.DEFINE DMA_BASE DMAP0
+.DEFINE DATA_DST DMAP1 ; 3 bytes
+.DEFINE DATA_DST_ORIG NTRL0 ; 2 bytes - in DMA0, but these bytes aren't used for regular DMA
+.DEFINE FAST_CMD DASB0 ; 1 bytes - in DMA0, but this byte isn't used for regular DMA
+.DEFINE FAST_TMP $4308 ; 2 bytes - in DMA0, but these bytes aren't used for regular DMA
+.DEFINE DATA_SRC_BANK $432B ; 1 byte - unused space in DMA2 (remains unchanged even across DMAs)
+.DEFINE DATA_LEN A1T1H ; 2 bytes
+.DEFINE MVN_ADDR $4315 ; 7 contiguous bytes to execute a payload
+.DEFINE MVN_SRC_BANK $4317
+.DEFINE MVN_DST_BANK $4316
+.DEFINE MVN_JMP $4318
+.DEFINE MVN_JMP_ADDR $4319
+	PHD
 	PHB
 	SEP #PROC_FLAGS::ACCUM8
-	LDA $14
+	LDA z:$10
 	PHA
-	PLB
-	REP #PROC_FLAGS::ACCUM8
-	PHD
-	PEA $0000
+	STA f:DATA_SRC_BANK
+; We can't set D just yet, but we push this value so that we can
+; pull it into D without disturbing X later.
+	LDX #DMA_BASE
+	PHX
+	LDX z:$0E
+	LDY z:$12
+	LDA z:$14
+; From here on we use direct addressing to access our locals, because
+; we don't need to worry about the passed-in values.
 	PLD
-	PHP
-	SEP #PROC_FLAGS::ACCUM8
-	LDY #$0000
-DECOMP_LOOP:
-	LDA [<DECOMP_DATA_SRC],Y
-	CMP #$00FF
-	BNE DECOMP_READ_CMD
-	PLP
-	PLD
-	PLB
-	RTL
-DECOMP_READ_CMD:
-	AND #$00E0
-	CMP #$00E0
-	BNE DECOMP_CMD_SHORT
-	LDA [<DECOMP_DATA_SRC],Y
-	ASL
-	ASL
-	ASL
-	AND #$00E0
-	PHA
-	LDA [<DECOMP_DATA_SRC],Y
-	INY
-	AND #$0003
-	STA <DECOMP_TEMP_UNREAD
-	LDA [<DECOMP_DATA_SRC],Y
-	INY
-	STA <DECOMP_TEMP_LENGTH
+	STX z:<FAST_TMP
+	STY z:<DATA_DST_ORIG
+	STA z:<DATA_DST+2
+; By default, all MVNs will copy within the same bank. Only literals need
+; to copy from the source address bank.
+	STA z:<MVN_SRC_BANK
+	STA z:<MVN_DST_BANK
+	LDA #$54  ; MVN
+	STA z:<MVN_ADDR
+; This needs to be a far jmp, because $C4 has no access to the io ports.
+	LDA #$5C  ; JML
+	STA z:<MVN_JMP
+	LDA #^LOOP
+	STA z:<MVN_JMP_ADDR+2
 	REP #PROC_FLAGS::ACCUM8
-	INC <DECOMP_TEMP_LENGTH
+; The compiler/linker seems to be unable to comprehend 16-bit labels that
+; aren't declared yet, so annoying hacks are needed?
+	LDA #(<LOOP | >LOOP << 8)
+	STA z:<MVN_JMP_ADDR
+	STZ z:<DATA_DST
+LOOP:
+; We store the value of X here before calling MVN, because for most operations
+; X needs to be adjusted to a different place for that opcode. For the
+; codepaths where X is left alone, we can bypass this with LOOP_NO_LOAD.
+	LDX z:<FAST_TMP
+LOOP_NO_LOAD:
+; This restores DBR with a minimum of code each loop. Coming into the first
+; loop, it gets the value of DATA_SRC_BANK we pushed from the input.
+	PLB
 	SEP #PROC_FLAGS::ACCUM8
-	BRA DECOMP_DECODE_CMD
-DECOMP_CMD_SHORT:
-	PHA
-	LDA [<DECOMP_DATA_SRC],Y
-	INY
+	LDA a:$00,X
+	CMP #$FF
+	BEQ EXIT
+	PHB
+READ_CMD:
+	AND #$E0
+	CMP #$E0
+	BEQ CMD_LONG
+CMD_SHORT:
+	STA z:<FAST_CMD
+	LDA a:$00,X
+	INX
 	AND #$001F
-	INC
-	STA <DECOMP_TEMP_LENGTH
-	STZ <DECOMP_TEMP_UNREAD
-DECOMP_DECODE_CMD:
-	PLA
-	BPL DECOMP_CMD_LOW
-	JMP DECOMP_CMD_HIGH
-DECOMP_CMD_LOW:
-	CMP #$0020
-	BEQ DECOMP_RLE8
-	CMP #$0040
-	BEQ DECOMP_RLE16
-	CMP #$0060
-	BEQ DECOMP_SEQ
-DECOMP_LITERAL:
-	LDA [<DECOMP_DATA_SRC],Y
-	INY
-	STA __BSS_START__,X
+; The actual number of bytes to operate on is the operand +1, but MVN adds
+; that +1 on its own. For the codepaths that don't use MVN, we'll add it
+; ourselves.
+	STA z:<DATA_LEN
+	STZ z:<DATA_LEN+1
+DECODE_CMD:
+	LDA z:<FAST_CMD
+	BPL CMD_LOW
+	JMP CMD_HIGH
+CMD_LONG:
+	LDA a:$00,X
+	ASL
+	ASL
+	ASL
+	AND #$00E0
+	STA z:<FAST_CMD
+	LDA a:$00,X
 	INX
-	REP #PROC_FLAGS::ACCUM8
-	DEC <DECOMP_TEMP_LENGTH
-	SEP #PROC_FLAGS::ACCUM8
-	BNE DECOMP_LITERAL
-	JMP DECOMP_LOOP
-DECOMP_RLE8:
-	LDA [<DECOMP_DATA_SRC],Y
-	INY
-	PHY
-	LDY <DECOMP_TEMP_LENGTH + 0
-DECOMP_RLE8_LOOP:
-	STA __BSS_START__,X
-	INX
-	DEY
-	BNE DECOMP_RLE8_LOOP
-	PLY
-	JMP DECOMP_LOOP
-DECOMP_RLE16:
-	REP #PROC_FLAGS::ACCUM8
-	LDA [<DECOMP_DATA_SRC],Y
-	INY
-	INY
-	PHY
-	LDY <DECOMP_TEMP_LENGTH + 0
-DECOMP_RLE16_LOOP:
-	STA __BSS_START__,X
-	INX
-	INX
-	DEY
-	BNE DECOMP_RLE16_LOOP
-	PLY
-	SEP #PROC_FLAGS::ACCUM8
-	JMP DECOMP_LOOP
-DECOMP_SEQ:
-	LDA [<DECOMP_DATA_SRC],Y
-	INY
-	PHY
-	LDY <DECOMP_TEMP_LENGTH + 0
-DECOMP_SEQ_LOOP:
-	STA __BSS_START__,X
-	INX
-	INC
-	DEY
-	BNE DECOMP_SEQ_LOOP
-	PLY
-	JMP DECOMP_LOOP
-DECOMP_CMD_HIGH:
-	STA <DECOMP_TEMP_COMMAND
-	REP #PROC_FLAGS::ACCUM8
-	LDA [<DECOMP_DATA_SRC],Y
+	AND #$0003
 	XBA
-	CLC
-	ADC <DECOMP_DEST_BUFFER + 0
-	INY
-	INY
-	PHY
-	TAY
+	LDA a:$00,X
+	INX
+	REP #PROC_FLAGS::ACCUM8
+	STA z:<DATA_LEN
 	SEP #PROC_FLAGS::ACCUM8
-	LDA <DECOMP_TEMP_COMMAND + 0
+	BRA DECODE_CMD
+EXIT:
+	REP #PROC_FLAGS::ACCUM8
+	PLB
+	PLD
+	RTL
+CMD_LOW:
+.A8
+	BEQ LITERAL
+	CMP #$40
+	BCC RLE8
+	BEQ RLE16
+	BRA SEQ
+RLE16:
+	REP #PROC_FLAGS::ACCUM8
+; Besides being distinguised by m, these are also distinguished by c.
+; c will be 1 for RLE16, and 0 for RLE8.
+RLE8:
+; It would be safe to read 16-bits here, but an unconditional 16-bit write
+; could overflow our buffer if DATA_LEN=0.
+	LDA a:$00,X
+	STA [<DATA_DST],Y
+	INX
+	STX z:<FAST_TMP
+	TYX
+	BCC RLE8_NORMAL
+; Extra increments for the rle16 case
+	INC z:<FAST_TMP
+	INY
+RLE8_NORMAL:
+	INY
+	REP #PROC_FLAGS::ACCUM8
+	LDA z:<DATA_LEN
+; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
+	BEQ LOOP
+	BCC RLE8_ASL_SKIP
+	ASL
+RLE8_ASL_SKIP:
+	DEC
+	JML MVN_ADDR
+LITERAL:
+.A8
+; This codepath does the most self-modifying code, because it needs to adjust
+; both the source bank and the jump target, and then adjust them back again after.
+; This allows all other codepaths (the common ones) to avoid self-modifying code.
+	LDA z:<DATA_SRC_BANK
+	STA z:<MVN_SRC_BANK
+	REP #PROC_FLAGS::ACCUM8
+	LDA #(<LITERAL_CLEANUP | >LITERAL_CLEANUP << 8)
+	STA z:<MVN_JMP_ADDR
+	LDA z:<DATA_LEN
+	JML MVN_ADDR
+LITERAL_CLEANUP:
+	LDA #(<LOOP | >LOOP << 8)
+	STA z:<MVN_JMP_ADDR
+	SEP #PROC_FLAGS::ACCUM8
+	LDA z:<DATA_DST+2
+	STA z:<MVN_SRC_BANK
+	JMP LOOP_NO_LOAD
+SEQ:
+	LDA a:$00,X
+	INX
+	STX z:<FAST_TMP
+	LDX z:<DATA_LEN
+	INX
+SEQ_LOOP:
+	STA [<DATA_DST],Y
+	INY
+	INC
+	DEX
+	BNE SEQ_LOOP
+	JMP LOOP
+CMD_HIGH:
+	REP #PROC_FLAGS::ACCUM8
+	LDA a:$00,X
+; Offset is stored big-endian, which is very annoying
+	XBA
+	CLC ; This can't be skipped - the ASLs in COMMAND_LONG set carry
+	ADC <DATA_DST_ORIG
+	INX
+	INX
+	STX z:<FAST_TMP
+	TAX
+	SEP #PROC_FLAGS::ACCUM8
+	LDA z:<FAST_CMD
 	CMP #$0080
-	BEQ DECOMP_BREF
-	CMP #$00A0
-	BEQ DECOMP_BREF_ROT
+	BEQ BREF
+	CMP #$00E0
+	BEQ BREF
+; c = 0 from the compare
+; For non BREF targets (the ones that can't use MVN), we add Y to DATA_LEN
+; to form a comparison target address. We know the output won't be bank-crossing,
+; so 16-bit math is fine here. Since DATA_LEN is one less than the number of bytes
+; copies, the target will be the last byte output, as opposed to one-past-the-end
+; as usual - this has consequences for how the test is structured.
+;
+; Also, we switch DBR to the destination bank. Since we are doing writes *and*
+; reads there, we need absolute X & Y addressing, instead of the normal
+; asymmetric mode we use to read from src and write to dest.
+	LDA z:<DATA_DST+2
+	PHA
+	PLB
+	REP #PROC_FLAGS::ACCUM8
+	TYA
+	ADC z:<DATA_LEN
+	STA z:<DATA_LEN
+	SEP #PROC_FLAGS::ACCUM8
+	LDA z:<FAST_CMD
 	CMP #$00C0
-	BEQ DECOMP_BREF_REV
-DECOMP_BREF:
-	LDA __BSS_START__,Y
-	STA __BSS_START__,X
-	INY
-	INX
+	BEQ BREF_REV
+	BRA BREF_ROT
+BREF:
 	REP #PROC_FLAGS::ACCUM8
-	DEC <DECOMP_TEMP_LENGTH
-	SEP #PROC_FLAGS::ACCUM8
-	BNE DECOMP_BREF
-	PLY
-	JMP DECOMP_LOOP
-DECOMP_BREF_ROT:
-	LDA __BSS_START__,Y
-	STA <DECOMP_TEMP_COMMAND
-	ASL <DECOMP_TEMP_COMMAND
-	ROR
-	ASL <DECOMP_TEMP_COMMAND
-	ROR
-	ASL <DECOMP_TEMP_COMMAND
-	ROR
-	ASL <DECOMP_TEMP_COMMAND
-	ROR
-	ASL <DECOMP_TEMP_COMMAND
-	ROR
-	ASL <DECOMP_TEMP_COMMAND
-	ROR
-	ASL <DECOMP_TEMP_COMMAND
-	ROR
-	ASL <DECOMP_TEMP_COMMAND
-	ROR
-	STA __BSS_START__,X
-	INY
+	LDA z:<DATA_LEN
+	JML MVN_ADDR
+BREF_ROT:
+.A8
+	LDA a:$00,X
 	INX
-	REP #PROC_FLAGS::ACCUM8
-	DEC <DECOMP_TEMP_LENGTH
-	SEP #PROC_FLAGS::ACCUM8
-	BNE DECOMP_BREF_ROT
-	PLY
-	JMP DECOMP_LOOP
-DECOMP_BREF_REV:
-	 LDA __BSS_START__,Y
-	 STA __BSS_START__,X
-	 DEY
-	 INX
-	 REP #PROC_FLAGS::ACCUM8
-	 DEC <DECOMP_TEMP_LENGTH
-	 SEP #PROC_FLAGS::ACCUM8
-	 BNE DECOMP_BREF_REV
-	 PLY
-	 JMP DECOMP_LOOP
+	STA z:<FAST_CMD
+	ASL z:<FAST_CMD
+	ROR
+	ASL z:<FAST_CMD
+	ROR
+	ASL z:<FAST_CMD
+	ROR
+	ASL z:<FAST_CMD
+	ROR
+	ASL z:<FAST_CMD
+	ROR
+	ASL z:<FAST_CMD
+	ROR
+	ASL z:<FAST_CMD
+	ROR
+	ASL z:<FAST_CMD
+	ROR
+	STA a:$00,Y
+; We compare vs the preincrement value, because DATA_LEN is storing the last
+; address instead of one-past-the-end. But we can't use the z flag, because
+; INY overwrites it - so we use c instead, which switches from 0 to 1 once Y
+; equals DATA_LEN.
+	CPY z:<DATA_LEN
+	INY
+	BCC BREF_ROT
+	JMP LOOP
+BREF_REV:
+	LDA a:$00,X
+	STA a:$00,Y
+	DEX
+	CPY z:<DATA_LEN
+	INY
+	BCC BREF_REV
+	JMP LOOP
+.ENDPROC
 
 ; Not actually decomp at all
 DECOMP_ENTRY2:
