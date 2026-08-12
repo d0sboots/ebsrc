@@ -75,6 +75,8 @@
 	STA z:<MVN_JMP_ADDR
 	STZ z:<DATA_DST
 LOOP:
+	SEP #PROC_FLAGS::ACCUM8
+LOOP_NO_SEP:
 ; We store the value of X here before calling MVN, because for most operations
 ; X needs to be adjusted to a different place for that opcode. For the
 ; codepaths where X is left alone, we can bypass this with LOOP_NO_LOAD.
@@ -83,16 +85,12 @@ LOOP_NO_LOAD:
 ; This restores DBR with a minimum of code each loop. Coming into the first
 ; loop, it gets the value of DATA_SRC_BANK we pushed from the input.
 	PLB
-	SEP #PROC_FLAGS::ACCUM8
-	LDA a:$00,X
-	CMP #$FF
-	BEQ EXIT
-	PHB
 READ_CMD:
-	AND #$E0
+	LDA a:$00,X
 	CMP #$E0
-	BEQ CMD_LONG
+	BCS CMD_LONG
 CMD_SHORT:
+	AND #$E0
 	STA z:<FAST_CMD
 	LDA a:$00,X
 	INX
@@ -103,11 +101,13 @@ CMD_SHORT:
 	STA z:<DATA_LEN
 	STZ z:<DATA_LEN+1
 DECODE_CMD:
+	PHB
 	LDA z:<FAST_CMD
 	BPL CMD_LOW
 	JMP CMD_HIGH
 CMD_LONG:
-	LDA a:$00,X
+	CMP #$FF
+	BEQ EXIT
 	ASL
 	ASL
 	ASL
@@ -116,12 +116,10 @@ CMD_LONG:
 	LDA a:$00,X
 	INX
 	AND #$0003
-	XBA
+	STA z:<DATA_LEN+1
 	LDA a:$00,X
 	INX
-	REP #PROC_FLAGS::ACCUM8
 	STA z:<DATA_LEN
-	SEP #PROC_FLAGS::ACCUM8
 	BRA DECODE_CMD
 EXIT:
 	REP #PROC_FLAGS::ACCUM8
@@ -193,7 +191,7 @@ SEQ_LOOP:
 	INC
 	DEX
 	BNE SEQ_LOOP
-	JMP LOOP
+	JMP LOOP_NO_SEP
 CMD_HIGH:
 	REP #PROC_FLAGS::ACCUM8
 	LDA a:$00,X
@@ -266,7 +264,7 @@ BREF_ROT:
 	CPY z:<DATA_LEN
 	INY
 	BCC BREF_ROT
-	JMP LOOP
+	JMP LOOP_NO_SEP
 BREF_REV:
 	LDA a:$00,X
 	STA a:$00,Y
@@ -274,7 +272,7 @@ BREF_REV:
 	CPY z:<DATA_LEN
 	INY
 	BCC BREF_REV
-	JMP LOOP
+	JMP LOOP_NO_SEP
 .ENDPROC
 
 ; Not actually decomp at all
