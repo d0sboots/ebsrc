@@ -1,5 +1,13 @@
 .GLOBAL DECOMP_LOOP
 
+.align $100
+DECOMP_REV_TABLE:
+bvalue .SET 0
+.REPEAT $100
+  .BYT bvalue&1 << 7 | bvalue&2 << 5 | bvalue&4 << 3 | bvalue&8 << 1 | bvalue&16 >> 1 | bvalue&32 >> 3 | bvalue&64 >> 5 | bvalue&128 >> 7
+  bvalue .SET bvalue + 1
+.ENDREPEAT
+
 DECOMP_ENTRY:
 	PHD
 	PHB
@@ -38,11 +46,3 @@ DECOMP_ENTRY:
 	STA z:<MVN_JMP_ADDR
 	STZ z:<DATA_DST
 	JMP a:DECOMP_LOOP
-
-.align $100
-DECOMP_REV_TABLE:
-bvalue .SET 0
-.REPEAT $100
-  .BYT bvalue&1 << 7 | bvalue&2 << 5 | bvalue&4 << 3 | bvalue&8 << 1 | bvalue&16 >> 1 | bvalue&32 >> 3 | bvalue&64 >> 5 | bvalue&128 >> 7
-  bvalue .SET bvalue + 1
-.ENDREPEAT
