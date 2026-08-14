@@ -1,0 +1,78 @@
+// This is a technical improvement to the speed of Earthbound's decomp
+// routine - it speeds it up about 2x in terms of master clocks.
+// For safety, add the following to used-ranges.yml:
+//
+// - (0x04FE00, 0x04FF37)
+//
+// Otherwise, this should be a drop-in replacement without needed any other adjustments.
+
+// The source code for this lives at https://github.com/d0sboots/ebsrc/tree/decomp_speed
+// This ccscript version just has the compiled machine code.
+
+// Copyright 2026 David Walker
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the “Software”),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
+// Replace the main definition of the decompression function.
+ROM[0xC41A9E] = {
+  "[4c 00 ff e2 20 a6 08 ab bd 00 00 c9 e0 b0 16 29]"
+  "[e0 85 07 bd 00 00 e8 29 1f 85 13 64 14 8b a5 07]"
+  "[10 23 4c 3e 1b c9 ff f0 17 0a 0a 0a 29 e0 85 07]"
+  "[bd 00 00 e8 29 03 85 14 bd 00 00 e8 85 13 80 dd]"
+  "[c2 20 ab 2b 6b f0 27 c9 40 90 06 f0 02 80 3e c2]"
+  "[20 bd 00 00 97 10 e8 86 08 bb 90 03 e6 08 c8 c8]"
+  "[c2 20 a5 13 f0 9d 90 01 0a 3a 5c 15 43 00 a5 2b]"
+  "[85 17 c2 20 a9 1d 1b 85 19 a5 13 5c 15 43 00 a9]"
+  "[a1 1a 85 19 e2 20 a5 12 85 17 4c a5 1a bd 00 00]"
+  "[e8 86 08 a6 13 e8 97 10 c8 1a ca d0 f9 4c a3 1a]"
+  "[c2 21 bd 00 00 eb 65 0a e8 e8 86 08 aa e2 20 a5]"
+  "[07 c9 80 f0 19 c9 e0 f0 15 a5 12 48 ab c2 20 98]"
+  "[65 13 85 13 e2 20 a5 07 c9 c0 f0 2d 80 08 c2 20]"
+  "[a5 13 5c 15 43 00 a9 c4 85 12 a9 fe 85 11 bd 00]"
+  "[00 85 10 a7 10 99 00 00 e8 c4 13 c8 90 f0 64 10]"
+  "[64 11 a5 16 85 12 4c a3 1a bd 00 00 99 00 00 ca]"
+  "[c4 13 c8 90 f4 4c a3 1a 00 00 00 00 00 00 00 00]"
+  "[00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00]"
+  "[00 00 00 00 00 00 00 00 00 00 00 00]"
+}
+
+// Add a 256-byte lookup table, and some additional initialization code that
+// didn't fit in the main routine.
+ROM[0xC4FE00] = {
+  "[00 80 40 c0 20 a0 60 e0 10 90 50 d0 30 b0 70 f0]"
+  "[08 88 48 c8 28 a8 68 e8 18 98 58 d8 38 b8 78 f8]"
+  "[04 84 44 c4 24 a4 64 e4 14 94 54 d4 34 b4 74 f4]"
+  "[0c 8c 4c cc 2c ac 6c ec 1c 9c 5c dc 3c bc 7c fc]"
+  "[02 82 42 c2 22 a2 62 e2 12 92 52 d2 32 b2 72 f2]"
+  "[0a 8a 4a ca 2a aa 6a ea 1a 9a 5a da 3a ba 7a fa]"
+  "[06 86 46 c6 26 a6 66 e6 16 96 56 d6 36 b6 76 f6]"
+  "[0e 8e 4e ce 2e ae 6e ee 1e 9e 5e de 3e be 7e fe]"
+  "[01 81 41 c1 21 a1 61 e1 11 91 51 d1 31 b1 71 f1]"
+  "[09 89 49 c9 29 a9 69 e9 19 99 59 d9 39 b9 79 f9]"
+  "[05 85 45 c5 25 a5 65 e5 15 95 55 d5 35 b5 75 f5]"
+  "[0d 8d 4d cd 2d ad 6d ed 1d 9d 5d dd 3d bd 7d fd]"
+  "[03 83 43 c3 23 a3 63 e3 13 93 53 d3 33 b3 73 f3]"
+  "[0b 8b 4b cb 2b ab 6b eb 1b 9b 5b db 3b bb 7b fb]"
+  "[07 87 47 c7 27 a7 67 e7 17 97 57 d7 37 b7 77 f7]"
+  "[0f 8f 4f cf 2f af 6f ef 1f 9f 5f df 3f bf 7f ff]"
+  "[0b 8b e2 20 a5 10 48 8f 2b 43 00 a6 0e a4 12 a5]"
+  "[14 f4 00 43 2b 86 08 84 0a 85 12 85 17 85 16 a9]"
+  "[54 85 15 a9 5c 85 18 a9 c4 85 1b c2 20 a9 a1 1a]"
+  "[85 19 64 10 4c a1 1a]"
+}
