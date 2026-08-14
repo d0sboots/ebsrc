@@ -15,15 +15,13 @@ DECOMP_ENTRY:
 	LDA z:$10
 	PHA
 	STA f:DATA_SRC_BANK
-; We can't set D just yet, but we push this value so that we can
-; pull it into D without disturbing X later.
-	LDX #DMA_BASE
-	PHX
 	LDX z:$0E
 	LDY z:$12
 	LDA z:$14
 ; From here on we use direct addressing to access our locals, because
 ; we don't need to worry about the passed-in values.
+; Use PEA+pull to avoid disturbing registers.
+	PEA a:DMA_BASE
 	PLD
 	STX z:<FAST_TMP
 	STY z:<DATA_DST_ORIG
