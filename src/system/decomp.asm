@@ -162,11 +162,10 @@ SEQ_LOOP:
 	BNE SEQ_LOOP
 	JMP LOOP_NO_SEP
 CMD_HIGH:
-	REP #PROC_FLAGS::ACCUM8
+	REP #PROC_FLAGS::ACCUM8|PROC_FLAGS::CARRY
 	LDA a:$00,X
 ; Offset is stored big-endian, which is very annoying
 	XBA
-	CLC ; This can't be skipped - the ASLs in COMMAND_LONG set carry
 	ADC <DATA_DST_ORIG
 	INX
 	INX
@@ -240,7 +239,7 @@ BREF_REV:
 .ENDPROC
 
 ; Space out the function so that other functions end in the same spots
-.RES $23
+.RES $24
 
 ; Not actually decomp at all
 DECOMP_ENTRY2:
