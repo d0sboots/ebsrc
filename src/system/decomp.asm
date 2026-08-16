@@ -18,26 +18,38 @@
 ; bank, and we need it to be the source. But we can solve this with a little
 ; push/pull in a judicious place.
 ;
-; We use the DMA1 registers for fastrom local storage.
-; The nature of how DMA is used in earthbound guarantees DMA0 and DMA1 won't
-; be used for HDMA. DMA0 is used in the NMI handler, so we can't rely on
-; any registers there that are used for normal DMA transfers. DMA1 and the
-; unused byte in other DMA channels should be safe.
+; ===== MEMORY SAFETY =====
+; We use the DMA0/DMA6/DMA7 registers for fastrom local storage.
+; TL;DR: Either don't use these in your code (satisfied by default for stock Earthbound), OR
+; don't use them in code that calls DECOMP *AND* don't use them during NMI (i.e. via SCHEDULE_OVERWORLD_TASK)
+; ===== END MEMORY SAFETY =====
+;
+; DMA0 is used to do transfers during vblank by the NMI handler. Thus, it
+; (generally) can't be used by any other code, and nothing else tries to use it.
+; We are only using the HDMA part of the DMA0 registers, which never get touched.
+;
+; In standard earthbound, DMA1 is used in COPY_TO_VRAM for normal transfers, and
+; DMA2/DMA4/DMA5 are used for HDMA. DMA6 and DMA7 are completely unused, and
+; thus normally safe. Since DECOMP is a leaf function, it would still be safe
+; for homebrew code to use them, as long as it didn't call DECOMP itself (this
+; could unexpectedly corrupt the DMA registers), or use them during NMI and
+; call DECOMP (which could corrupt them as DECOMP runs).
 ;
 ; The code layout is a tangled zig-zag of blocks, set up to allow branch
 ; targets to work in one byte rather than read clearly.
 .DEFINE DMA_BASE DMAP0
-.DEFINE DATA_DST DMAP1 ; 3 bytes
-.DEFINE DATA_DST_ORIG NTRL0 ; 2 bytes - in DMA0, but these bytes aren't used for regular DMA
-.DEFINE FAST_CMD DASB0 ; 1 bytes - in DMA0, but this byte isn't used for regular DMA
-.DEFINE FAST_TMP $4308 ; 2 bytes - in DMA0, but these bytes aren't used for regular DMA
-.DEFINE DATA_SRC_BANK $432B ; 1 byte - unused space in DMA2 (remains unchanged even across DMAs)
-.DEFINE DATA_LEN A1T1H ; 2 bytes
-.DEFINE MVN_ADDR $4315 ; 7 contiguous bytes to execute a payload
-.DEFINE MVN_SRC_BANK $4317
-.DEFINE MVN_DST_BANK $4316
-.DEFINE MVN_JMP $4318
-.DEFINE MVN_JMP_ADDR $4319
+.DEFINE FAST_CMD $4307 ; DASB0 - 1 byte - in DMA0, but this byte isn't used for regular DMA
+.DEFINE FAST_TMP $4308 ; A2A0L - 2 bytes - in DMA0, but these bytes aren't used for regular DMA
+.DEFINE DATA_DST_ORIG $430A ; NTRL0 - 2 bytes - in DMA0, but these bytes aren't used for regular DMA
+.DEFINE DATA_DST $4368 ; A2A6L - 3 bytes - HDMA in DMA6, will be undisturbed
+.DEFINE DATA_SRC_BANK $436B ; 1 byte - unused space in DMA6
+.DEFINE DATA_LEN $4370 ; DMAP7 - 2 bytes
+.DEFINE TABLE_ADDR $4372 ; A1T7L - 3 bytes
+.DEFINE MVN_ADDR $4375 ; DAS7L - 7 contiguous bytes to execute a payload
+.DEFINE MVN_SRC_BANK $4377 ; DASB7
+.DEFINE MVN_DST_BANK $4376 ; DAS7H
+.DEFINE MVN_JMP $4378 ; A2A7L
+.DEFINE MVN_JMP_ADDR $4379 ; A2A7H
 ; Because our routine is slightly larger than the original, we hoist the init
 ; code elsewhere and only have the main loop here. This costs an extra
 ; 6 cycles/call, which is tiny.
@@ -137,12 +149,12 @@ LITERAL:
 	LDA z:<DATA_SRC_BANK
 	STA z:<MVN_SRC_BANK
 	REP #PROC_FLAGS::ACCUM8
-	LDA #(<LITERAL_CLEANUP | >LITERAL_CLEANUP << 8)
+	LDA #.LOWORD(LITERAL_CLEANUP)
 	STA z:<MVN_JMP_ADDR
 	LDA z:<DATA_LEN
 	JML MVN_ADDR
 LITERAL_CLEANUP:
-	LDA #(<DECOMP_LOOP | >DECOMP_LOOP << 8)
+	LDA #.LOWORD(DECOMP_LOOP)
 	STA z:<MVN_JMP_ADDR
 	SEP #PROC_FLAGS::ACCUM8
 	LDA z:<DATA_DST+2
@@ -162,7 +174,7 @@ SEQ_LOOP:
 	BNE SEQ_LOOP
 	JMP LOOP_NO_SEP
 CMD_HIGH:
-	REP #PROC_FLAGS::ACCUM8|PROC_FLAGS::CARRY
+	REP #PROC_FLAGS::ACCUM8 | PROC_FLAGS::CARRY
 	LDA a:$00,X
 ; Offset is stored big-endian, which is very annoying
 	XBA
@@ -205,15 +217,9 @@ BREF:
 	JML MVN_ADDR
 BREF_ROT:
 .A8
-; Steal DATA_DST to do indirect reads from our table
-	LDA #^DECOMP_REV_TABLE
-	STA z:<DATA_DST+2
-	LDA #>DECOMP_REV_TABLE
-	STA z:<DATA_DST+1
-BREF_ROT_LOOP:
 	LDA a:$00,X
-	STA z:<DATA_DST
-	LDA [<DATA_DST]
+	STA z:<TABLE_ADDR
+	LDA [<TABLE_ADDR]
 	STA a:$00,Y
 	INX
 ; We compare vs the preincrement value, because DATA_LEN is storing the last
@@ -222,7 +228,7 @@ BREF_ROT_LOOP:
 ; equals DATA_LEN.
 	CPY z:<DATA_LEN
 	INY
-	BCC BREF_ROT_LOOP
+	BCC BREF_ROT
 	STZ z:<DATA_DST
 	STZ z:<DATA_DST+1
 	LDA z:<MVN_DST_BANK

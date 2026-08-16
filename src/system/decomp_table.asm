@@ -1,5 +1,7 @@
 .GLOBAL DECOMP_LOOP
 
+; Table for bitrotated lookups. *Must* be page-aligned, or else the lookup
+; code gets more complicated.
 .align $100
 DECOMP_REV_TABLE:
 bvalue .SET 0
@@ -8,11 +10,13 @@ bvalue .SET 0
   bvalue .SET bvalue + 1
 .ENDREPEAT
 
+; Initialization code, invoked from DECOMP
 DECOMP_ENTRY:
 	PHD
 	PHB
 	SEP #PROC_FLAGS::ACCUM8
 	LDA z:$10
+; We will pull this into DBR later
 	PHA
 	STA f:DATA_SRC_BANK
 	LDX z:$0E
@@ -38,9 +42,9 @@ DECOMP_ENTRY:
 	LDA #^DECOMP_LOOP
 	STA z:<MVN_JMP_ADDR+2
 	REP #PROC_FLAGS::ACCUM8
-; The compiler/linker seems to be unable to comprehend 16-bit labels that
-; aren't declared yet, so annoying hacks are needed?
-	LDA #(<DECOMP_LOOP | >DECOMP_LOOP << 8)
+	LDA #.LOWORD(DECOMP_LOOP)
 	STA z:<MVN_JMP_ADDR
 	STZ z:<DATA_DST
+	LDA #(DECOMP_REV_TABLE >> 8)
+	STA z:<TABLE_ADDR+1
 	JMP a:DECOMP_LOOP
