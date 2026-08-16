@@ -116,8 +116,21 @@ CMD_LOW:
 	BRA SEQ
 RLE16:
 	REP #PROC_FLAGS::ACCUM8
-; Besides being distinguised by m, these are also distinguished by c.
-; c will be 1 for RLE16, and 0 for RLE8.
+	LDA a:$00,X
+	STA [<DATA_DST],Y
+	INX
+	INX
+	STX z:<FAST_TMP
+	TYX
+; Extra increments for the rle16 case
+	INY
+	INY
+	LDA z:<DATA_LEN
+; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
+	BEQ DECOMP_LOOP
+	ASL
+	DEC
+	JML MVN_ADDR
 RLE8:
 ; It would be safe to read 16-bits here, but an unconditional 16-bit write
 ; could overflow our buffer if DATA_LEN=0.
@@ -126,19 +139,11 @@ RLE8:
 	INX
 	STX z:<FAST_TMP
 	TYX
-	BCC RLE8_NORMAL
-; Extra increments for the rle16 case
-	INC z:<FAST_TMP
-	INY
-RLE8_NORMAL:
 	INY
 	REP #PROC_FLAGS::ACCUM8
 	LDA z:<DATA_LEN
 ; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
 	BEQ DECOMP_LOOP
-	BCC RLE8_ASL_SKIP
-	ASL
-RLE8_ASL_SKIP:
 	DEC
 	JML MVN_ADDR
 LITERAL:
