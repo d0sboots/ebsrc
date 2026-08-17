@@ -19,7 +19,7 @@
 ; push/pull in a judicious place.
 ;
 ; ===== MEMORY SAFETY =====
-; We use the DMA0/DMA6/DMA7 registers for fastrom local storage.
+; We use the DMA0/DMA6/DMA7 registers for fastrom local storage. Also WMADD[LMH] for DMA access.
 ; TL;DR: Either don't use these in your code (satisfied by default for stock Earthbound), OR
 ; don't use them in code that calls DECOMP *AND* don't use them during NMI (i.e. via SCHEDULE_OVERWORLD_TASK)
 ; ===== END MEMORY SAFETY =====
@@ -54,15 +54,103 @@
 ; code elsewhere and only have the main loop here. This costs an extra
 ; 6 cycles/call, which is tiny.
 	JMP a:DECOMP_ENTRY
+CMD_LONG:
+.A8
+	CMP #$FF
+	BEQ EXIT
+	ASL
+	ASL
+	ASL
+	AND #$E0
+	STA z:<FAST_CMD
+	LDA a:$00,X
+	INX
+	AND #$03
+	STA z:<DATA_LEN+1
+	LDA a:$00,X
+	INX
+	STA z:<DATA_LEN
+	BRA DECODE_CMD
+DO_DMA:
+; Used to distinguish between RLE8 (c=1) and LITERAL (c=0)
+	CMP #$20
+; If there is no HDMA going on, then we can use DMA to accomplish RLE8 and LITERAL commands very quickly.
+; This strategy won't work for backrefs, because those require copying from WRAM to WRAM, which DMA can't do.
+; Similarly, it won't work for RLE16, since that requires WRAM-WRAM copies, or else strided ROM-WRAM copies,
+; which also can't be done.
+; If HDMA is occuring we fall back to the slow path, because there is a hardware bug on early
+; SNES models involving HDMA right after DMA.
+	LDA f:HDMAEN_MIRROR
+	BNE DMA_SLOWPATH
+; We use the fact that a=0 here. DMAP of 0 is Transfer A->B, Increment A-Bus, 1-byte transfer, which is
+; what we want for LITERAL. For RLE8, we need $08 which is A-Bus fixed.
+	BCC LITERAL_SKIP
+	LDA #$08
+LITERAL_SKIP:
+	STA z:<$4360 ; DMAP6
+	STX z:<$4362 ; A1T6L/H
+	REP #PROC_FLAGS::ACCUM8
+	TYA
+	STA f:$002181 ; WMADDL/M
+	LDA z:<DATA_LEN
+	INC  ; Translate +1 MVN values to DMA count values
+	STA z:<$4365 ; DAS6L/H
+; We can afford to overwrite HDMAEN since we already verified HDMAEN_MIRROR is 0
+	LDA #$0040  ; HDMAEN = 0, MDMAEN = bit 6
+	STA f:MDMAEN
+; Transfer is over, get updated values for X and Y
+; WMADD can't be read for Y, so we have to use DATA_LEN and math.
+; c is *still* the value from the CMP at the top.
+	BCC RLE_X_LOAD
+; RLE case
+	INX
+	BRA RLE_Y_ADD
+RLE_X_LOAD:
+; LITERAL case
+	LDX z:<$4362 ; A1T6L/H
+; We set carry here to accomplish the +1 conversion of the INC above.
+; We could have stored that value back instead, but that puts a 3-cycle op on the common path
+; and a 2-cycle op on the RLE path, whereas here we have one 2-cycle ops on only the literal path.
+	SEC
+RLE_Y_ADD:
+	TYA
+	ADC z:<DATA_LEN
+	TAY
+	SEP #PROC_FLAGS::ACCUM8
+	BRA DECOMP_LOOP_NO_LOAD
+DMA_SLOWPATH:
+	BCC LITERAL
+RLE8:
+; It would be safe to read 16-bits here, but an unconditional 16-bit write
+; could overflow our buffer if DATA_LEN=0.
+	LDA a:$00,X
+	STA [<DATA_DST],Y
+	INX
+	STX z:<FAST_TMP
+	TYX
+	INY
+	REP #PROC_FLAGS::ACCUM8
+	LDA z:<DATA_LEN
+; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
+	BEQ DECOMP_LOOP
+	DEC
+	JML MVN_ADDR
+EXIT:
+	REP #PROC_FLAGS::ACCUM8
+	PLB
+	PLD
+	RTL
 DECOMP_LOOP:
 .GLOBAL DECOMP_LOOP
 	SEP #PROC_FLAGS::ACCUM8
-LOOP_NO_SEP:
+DECOMP_LOOP_NO_SEP:
+.GLOBAL DECOMP_LOOP_NO_SEP
 ; We store the value of X here before calling MVN, because for most operations
 ; X needs to be adjusted to a different place for that opcode. For the
-; codepaths where X is left alone, we can bypass this with LOOP_NO_LOAD.
+; codepaths where X is left alone, we can bypass this with DECOMP_LOOP_NO_LOAD.
 	LDX z:<FAST_TMP
-LOOP_NO_LOAD:
+DECOMP_LOOP_NO_LOAD:
+.GLOBAL DECOMP_LOOP_NO_LOAD
 ; This restores DBR with a minimum of code each loop. Coming into the first
 ; loop, it gets the value of DATA_SRC_BANK we pushed from the input.
 	PLB
@@ -84,36 +172,13 @@ CMD_SHORT:
 DECODE_CMD:
 	PHB
 	LDA z:<FAST_CMD
-	BPL CMD_LOW
-	JMP CMD_HIGH
-CMD_LONG:
-	CMP #$FF
-	BEQ EXIT
-	ASL
-	ASL
-	ASL
-	AND #$00E0
-	STA z:<FAST_CMD
-	LDA a:$00,X
-	INX
-	AND #$0003
-	STA z:<DATA_LEN+1
-	LDA a:$00,X
-	INX
-	STA z:<DATA_LEN
-	BRA DECODE_CMD
-EXIT:
-	REP #PROC_FLAGS::ACCUM8
-	PLB
-	PLD
-	RTL
+	BMI CMD_HIGH
 CMD_LOW:
 .A8
-	BEQ LITERAL
 	CMP #$40
-	BCC RLE8
+	BCC DO_DMA
 	BEQ RLE16
-	BRA SEQ
+	JMP SEQ
 RLE16:
 	REP #PROC_FLAGS::ACCUM8
 	LDA a:$00,X
@@ -129,21 +194,6 @@ RLE16:
 ; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
 	BEQ DECOMP_LOOP
 	ASL
-	DEC
-	JML MVN_ADDR
-RLE8:
-; It would be safe to read 16-bits here, but an unconditional 16-bit write
-; could overflow our buffer if DATA_LEN=0.
-	LDA a:$00,X
-	STA [<DATA_DST],Y
-	INX
-	STX z:<FAST_TMP
-	TYX
-	INY
-	REP #PROC_FLAGS::ACCUM8
-	LDA z:<DATA_LEN
-; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
-	BEQ DECOMP_LOOP
 	DEC
 	JML MVN_ADDR
 LITERAL:
@@ -164,20 +214,7 @@ LITERAL_CLEANUP:
 	SEP #PROC_FLAGS::ACCUM8
 	LDA z:<DATA_DST+2
 	STA z:<MVN_SRC_BANK
-	JMP LOOP_NO_LOAD
-SEQ:
-	LDA a:$00,X
-	INX
-	STX z:<FAST_TMP
-	LDX z:<DATA_LEN
-	INX
-SEQ_LOOP:
-	STA [<DATA_DST],Y
-	INY
-	INC
-	DEX
-	BNE SEQ_LOOP
-	JMP LOOP_NO_SEP
+	JMP DECOMP_LOOP_NO_LOAD
 CMD_HIGH:
 	REP #PROC_FLAGS::ACCUM8 | PROC_FLAGS::CARRY
 	LDA a:$00,X
@@ -215,42 +252,24 @@ CMD_HIGH:
 	LDA z:<FAST_CMD
 	CMP #$00C0
 	BEQ BREF_REV
-	BRA BREF_ROT
+	JMP BREF_ROT
 BREF:
 	REP #PROC_FLAGS::ACCUM8
 	LDA z:<DATA_LEN
 	JML MVN_ADDR
-BREF_ROT:
-.A8
-	LDA a:$00,X
-	STA z:<TABLE_ADDR
-	LDA [<TABLE_ADDR]
-	STA a:$00,Y
-	INX
-; We compare vs the preincrement value, because DATA_LEN is storing the last
-; address instead of one-past-the-end. But we can't use the z flag, because
-; INY overwrites it - so we use c instead, which switches from 0 to 1 once Y
-; equals DATA_LEN.
-	CPY z:<DATA_LEN
-	INY
-	BCC BREF_ROT
-	STZ z:<DATA_DST
-	STZ z:<DATA_DST+1
-	LDA z:<MVN_DST_BANK
-	STA z:<DATA_DST+2
-	JMP LOOP_NO_SEP
 BREF_REV:
+.A8
 	LDA a:$00,X
 	STA a:$00,Y
 	DEX
 	CPY z:<DATA_LEN
 	INY
 	BCC BREF_REV
-	JMP LOOP_NO_SEP
+	JMP DECOMP_LOOP_NO_SEP
 .ENDPROC
 
 ; Space out the function so that other functions end in the same spots
-.RES $24
+.RES $1A
 
 ; Not actually decomp at all
 DECOMP_ENTRY2:
