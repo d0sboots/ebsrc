@@ -1,19 +1,12 @@
-.GLOBAL DECOMP_LOOP
-.GLOBAL DECOMP_LOOP_NO_SEP
-.GLOBAL DECOMP_LOOP_NO_LOAD
-
-; Table for bitrotated lookups. *Must* be page-aligned, or else the lookup
-; code gets more complicated.
-.align $100
-DECOMP_REV_TABLE:
-bvalue .SET 0
-.REPEAT $100
-  .BYT bvalue&1 << 7 | bvalue&2 << 5 | bvalue&4 << 3 | bvalue&8 << 1 | bvalue&16 >> 1 | bvalue&32 >> 3 | bvalue&64 >> 5 | bvalue&128 >> 7
-  bvalue .SET bvalue + 1
-.ENDREPEAT
+; These are logically local to the routine, just split across two
+; locations/files, which is why they aren't declared in bank04.asm.
+.GLOBAL DECOMP_LOOP: absolute
+.GLOBAL DECOMP_LOOP_NO_SEP: absolute
+.GLOBAL DECOMP_LOOP_NO_LOAD: absolute
 
 ; Initialization code, invoked from DECOMP
 DECOMP_ENTRY:
+.EXPORT DECOMP_ENTRY
 	PHD
 	PHB
 	SEP #PROC_FLAGS::ACCUM8
@@ -51,7 +44,7 @@ DECOMP_ENTRY:
 	LDA #.LOWORD(DECOMP_LOOP)
 	STA z:<MVN_JMP_ADDR
 	STZ z:<DATA_DST
-	LDA #(DECOMP_REV_TABLE >> 8)
+	LDA #(DECOMP_TIMING_TABLE >> 8)
 	STA z:<TABLE_ADDR+1
 	SEP #PROC_FLAGS::ACCUM8
 	JMP a:DECOMP_LOOP_NO_LOAD
@@ -71,23 +64,20 @@ SEQ_LOOP:
 	DEX
 	BNE SEQ_LOOP
 	JMP DECOMP_LOOP_NO_SEP
-; Another rarely-called routine that can be pulled out for size.
-BREF_ROT:
-.A8
-	LDA a:$00,X
-	STA z:<TABLE_ADDR
-	LDA [<TABLE_ADDR]
-	STA a:$00,Y
-	INX
-; We compare vs the preincrement value, because DATA_LEN is storing the last
-; address instead of one-past-the-end. But we can't use the z flag, because
-; INY overwrites it - so we use c instead, which switches from 0 to 1 once Y
-; equals DATA_LEN.
-	CPY z:<DATA_LEN
-	INY
-	BCC BREF_ROT
-	STZ z:<DATA_DST
-	STZ z:<DATA_DST+1
-	LDA z:<MVN_DST_BANK
-	STA z:<DATA_DST+2
-	JMP DECOMP_LOOP_NO_SEP
+
+; Table for bitrotated lookups. *Must* be page-aligned, or else the lookup
+; code gets more complicated.
+.align $100
+DECOMP_ROT_TABLE:
+bvalue .SET 0
+.REPEAT $100
+  .BYT bvalue&1 << 7 | bvalue&2 << 5 | bvalue&4 << 3 | bvalue&8 << 1 | bvalue&16 >> 1 | bvalue&32 >> 3 | bvalue&64 >> 5 | bvalue&128 >> 7
+  bvalue .SET bvalue + 1
+.ENDREPEAT
+
+.align $100
+DECOMP_TIMING_TABLE:
+.REPEAT 170
+  .BYT 120
+.ENDREPEAT
+

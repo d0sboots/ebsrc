@@ -54,92 +54,88 @@
 ; code elsewhere and only have the main loop here. This costs an extra
 ; 6 cycles/call, which is tiny.
 	JMP a:DECOMP_ENTRY
-CMD_LONG:
-.A8
-	CMP #$FF
-	BEQ EXIT
-	ASL
-	ASL
-	ASL
-	AND #$E0
-	STA z:<FAST_CMD
-	LDA a:$00,X
-	INX
-	AND #$03
-	STA z:<DATA_LEN+1
-	LDA a:$00,X
-	INX
-	STA z:<DATA_LEN
-	BRA DECODE_CMD
 DO_DMA:
+.A8
+; Doing DMAs during regular processing (not vblank) is *very* annoying, due to an bug on
+; early SNES boards involving HDMA immediately following a regular DMA. Disabling HDMA
+; isn't an option, since that would cause visual artifacts. We could avoid DMA when HDMA
+; is in use (the sane tactic), but that's leaving performance on the table.
+;
+; Instead, we read the H-counter from the PPU so we know exactly how many cycles there are
+; until hblank, and bound our DMAs to be a safe length. This involves potentially looping
+; them multiple times, creating a lot of expensive setup along this path. Since there are
+; complications like memory refresh in the middle of the scanline, the actual calculation
+; is offloaded to a lookup table.
 ; Used to distinguish between RLE8 (c=1) and LITERAL (c=0)
 	CMP #$20
-; If there is no HDMA going on, then we can use DMA to accomplish RLE8 and LITERAL commands very quickly.
-; This strategy won't work for backrefs, because those require copying from WRAM to WRAM, which DMA can't do.
-; Similarly, it won't work for RLE16, since that requires WRAM-WRAM copies, or else strided ROM-WRAM copies,
-; which also can't be done.
-; If HDMA is occuring we fall back to the slow path, because there is a hardware bug on early
-; SNES models involving HDMA right after DMA.
-	LDA f:HDMAEN_MIRROR
-	BNE DMA_SLOWPATH
-; We use the fact that a=0 here. DMAP of 0 is Transfer A->B, Increment A-Bus, 1-byte transfer, which is
-; what we want for LITERAL. For RLE8, we need $08 which is A-Bus fixed.
-	BCC LITERAL_SKIP
-	LDA #$08
-LITERAL_SKIP:
-	STA z:<$4360 ; DMAP6
+	LDA #0
+	PHA
+; Since we are accessing a lot of IO ports that aren't DMA, its faster and more flexible
+; to use absolute addressing instead of far.
+	PLB
 	STX z:<$4362 ; A1T6L/H
-	REP #PROC_FLAGS::ACCUM8
-	TYA
-	STA f:$002181 ; WMADDL/M
-	LDA z:<DATA_LEN
-	INC  ; Translate +1 MVN values to DMA count values
-	STA z:<$4365 ; DAS6L/H
-; We can afford to overwrite HDMAEN since we already verified HDMAEN_MIRROR is 0
-	LDA #$0040  ; HDMAEN = 0, MDMAEN = bit 6
-	STA f:MDMAEN
-; Transfer is over, get updated values for X and Y
-; WMADD can't be read for Y, so we have to use DATA_LEN and math.
-; c is *still* the value from the CMP at the top.
-	BCC RLE_X_LOAD
-; RLE case
+	STY a:$2181 ; WMADDL/M
+; DMAP of 0 is Transfer A->B, Increment A-Bus, 1-byte transfer, which is
+; what we want for LITERAL. For RLE8, we need $08 which is A-Bus fixed.
+	BCC DMA_SETUP
+	LDA #$08
 	INX
-	BRA RLE_Y_ADD
-RLE_X_LOAD:
-; LITERAL case
-	LDX z:<$4362 ; A1T6L/H
-; We set carry here to accomplish the +1 conversion of the INC above.
-; We could have stored that value back instead, but that puts a 3-cycle op on the common path
-; and a 2-cycle op on the RLE path, whereas here we have one 2-cycle ops on only the literal path.
-	SEC
-RLE_Y_ADD:
+DMA_SETUP:
+	STA z:<$4360 ; DMAP6
+; We handle adjusting the Y register at the top here instead of the bottom, because
+; it is more convenient to do so when the carry flag is clear, and along with another
+; required 16-bit op.
+	REP #PROC_FLAGS::ACCUM8 | PROC_FLAGS::CARRY
+	INC z:<DATA_LEN ; Translate +1 MVN values to DMA count values
 	TYA
 	ADC z:<DATA_LEN
 	TAY
 	SEP #PROC_FLAGS::ACCUM8
-	BRA DECOMP_LOOP_NO_LOAD
-DMA_SLOWPATH:
-	BCC LITERAL
-RLE8:
-; It would be safe to read 16-bits here, but an unconditional 16-bit write
-; could overflow our buffer if DATA_LEN=0.
-	LDA a:$00,X
-	STA [<DATA_DST],Y
-	INX
-	STX z:<FAST_TMP
-	TYX
-	INY
+DMA_LOOP:
+; Load the current PPU H-counter. Requires a dummy-read plus a double-read.
+	LDA a:$2137 ; SLHV
+	LDA a:$213C ; OPHCT
+	XBA
+	LDA a:$213C ; OPHCT
+	LSR
+; Manually clear A - 2nd load gets open-bus values in high bits
+; This is unimportant when dealing with 8-bit values, but when we switch to 16-bit mode
+; below, we want A to be only 8 bits still. The compare *must* be 16-bits since DATA_LEN
+; can be larger than 256.
+	LDA $0
+	XBA
+	ROR ; We've shifted a 9-bit value to an 8-bit value
+	STA z:<TABLE_ADDR
+	LDA [<TABLE_ADDR]
+	BEQ DMA_LOOP ; If we would hit hblank, delay by trying again
 	REP #PROC_FLAGS::ACCUM8
+	CMP z:<DATA_LEN
+	BCC SKIP_DATA_LEN
 	LDA z:<DATA_LEN
-; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
-	BEQ DECOMP_LOOP
-	DEC
-	JML MVN_ADDR
-EXIT:
-	REP #PROC_FLAGS::ACCUM8
-	PLB
-	PLD
-	RTL
+SKIP_DATA_LEN:
+	STA z:<$4365 ; DAS6L/H
+; SBC is accumulator - data, but we need data - accumulator, which means
+; negating accumulator ourselves. We could get rid of the INC by using CLC,
+; but then the carry flag wouldn't be set correctly below.
+	SEC
+	SBC z:<DATA_LEN
+	EOR #$FFFF
+	INC
+	STA z:<DATA_LEN
+	SEP #PROC_FLAGS::ACCUM8
+	LDA #$40  ; MDMAEN = bit 6
+	STA a:MDMAEN
+; A few cycles run before DMA activates, but we aren't messing with anything
+; critical in those cycles here.
+; c is the value from SBC. c=1 iff old DATA_LEN <= transfer size, and since
+; DATA_LEN is always >= transfer size, this means c=1 iff we are done.
+	BCC DMA_LOOP
+	LDA z:<$4360 ; DMAP6, still will be 0 if LITERAL
+	BNE DECOMP_LOOP_NO_LOAD ; We already incremented X
+	LDX z:<$4362 ; A1T6L/H, DMA adjusted address for us
+	BRA DECOMP_LOOP_NO_LOAD
+; The main loop starts here, so that conditional branch targets can make use of the full [-128,127] range
+; by also jumping *before* this point.
 DECOMP_LOOP:
 .GLOBAL DECOMP_LOOP
 	SEP #PROC_FLAGS::ACCUM8
@@ -179,6 +175,28 @@ CMD_LOW:
 	BCC DO_DMA
 	BEQ RLE16
 	JMP SEQ
+CMD_LONG:
+.A8
+	CMP #$FF
+	BEQ EXIT
+	ASL
+	ASL
+	ASL
+	AND #$E0
+	STA z:<FAST_CMD
+	LDA a:$00,X
+	INX
+	AND #$03
+	STA z:<DATA_LEN+1
+	LDA a:$00,X
+	INX
+	STA z:<DATA_LEN
+	BRA DECODE_CMD
+EXIT:
+	REP #PROC_FLAGS::ACCUM8
+	PLB
+	PLD
+	RTL
 RLE16:
 	REP #PROC_FLAGS::ACCUM8
 	LDA a:$00,X
@@ -191,30 +209,11 @@ RLE16:
 	INY
 	INY
 	LDA z:<DATA_LEN
-; If we are only RLE'ing 1 byte, we have to stop now. MVN would overflow and write 64k.
+; If we are only RLE'ing 2 bytes, we have to stop now. MVN would overflow and write 64k.
 	BEQ DECOMP_LOOP
 	ASL
 	DEC
 	JML MVN_ADDR
-LITERAL:
-.A8
-; This codepath does the most self-modifying code, because it needs to adjust
-; both the source bank and the jump target, and then adjust them back again after.
-; This allows all other codepaths (the common ones) to avoid self-modifying code.
-	LDA z:<DATA_SRC_BANK
-	STA z:<MVN_SRC_BANK
-	REP #PROC_FLAGS::ACCUM8
-	LDA #.LOWORD(LITERAL_CLEANUP)
-	STA z:<MVN_JMP_ADDR
-	LDA z:<DATA_LEN
-	JML MVN_ADDR
-LITERAL_CLEANUP:
-	LDA #.LOWORD(DECOMP_LOOP)
-	STA z:<MVN_JMP_ADDR
-	SEP #PROC_FLAGS::ACCUM8
-	LDA z:<DATA_DST+2
-	STA z:<MVN_SRC_BANK
-	JMP DECOMP_LOOP_NO_LOAD
 CMD_HIGH:
 	REP #PROC_FLAGS::ACCUM8 | PROC_FLAGS::CARRY
 	LDA a:$00,X
@@ -251,12 +250,7 @@ CMD_HIGH:
 	SEP #PROC_FLAGS::ACCUM8
 	LDA z:<FAST_CMD
 	CMP #$00C0
-	BEQ BREF_REV
-	JMP BREF_ROT
-BREF:
-	REP #PROC_FLAGS::ACCUM8
-	LDA z:<DATA_LEN
-	JML MVN_ADDR
+	BNE BREF_ROT
 BREF_REV:
 .A8
 	LDA a:$00,X
@@ -265,11 +259,37 @@ BREF_REV:
 	CPY z:<DATA_LEN
 	INY
 	BCC BREF_REV
+	JMP a:DECOMP_LOOP_NO_SEP
+BREF:
+	REP #PROC_FLAGS::ACCUM8
+	LDA z:<DATA_LEN
+	JML MVN_ADDR
+BREF_ROT:
+.A8
+; This normally is set up for the DMA table, we repoint it in the rare times
+; we need it for rotate
+	LDA #>DECOMP_ROT_TABLE
+	STA z:<TABLE_ADDR+1
+BREF_ROT_LOOP:
+	LDA a:$00,X
+	STA z:<TABLE_ADDR
+	LDA [<TABLE_ADDR]
+	STA a:$00,Y
+	INX
+; We compare vs the preincrement value, because DATA_LEN is storing the last
+; address instead of one-past-the-end. But we can't use the z flag, because
+; INY overwrites it - so we use c instead, which switches from 0 to 1 once Y
+; equals DATA_LEN.
+	CPY z:<DATA_LEN
+	INY
+	BCC BREF_ROT_LOOP
+	LDA #>DECOMP_ROT_TABLE
+	STA z:<TABLE_ADDR+1
 	JMP DECOMP_LOOP_NO_SEP
 .ENDPROC
 
 ; Space out the function so that other functions end in the same spots
-.RES $1A
+.RES $16
 
 ; Not actually decomp at all
 DECOMP_ENTRY2:
