@@ -68,15 +68,10 @@ DO_DMA:
 ; is offloaded to a lookup table.
 ; Used to distinguish between RLE8 (c=1) and LITERAL (c=0)
 	CMP #$20
-	LDA #0
-	PHA
-; Since we are accessing a lot of IO ports that aren't DMA, its faster and more flexible
-; to use absolute addressing instead of far.
-	PLB
 	STX z:<$4362 ; A1T6L/H
-	STY a:$2181 ; WMADDL/M
 ; DMAP of 0 is Transfer A->B, Increment A-Bus, 1-byte transfer, which is
 ; what we want for LITERAL. For RLE8, we need $08 which is A-Bus fixed.
+; This takes advantage of the fact that a=0 when c=0.
 	BCC DMA_SETUP
 	LDA #$08
 	INX
@@ -88,27 +83,25 @@ DMA_SETUP:
 	REP #PROC_FLAGS::ACCUM8 | PROC_FLAGS::CARRY
 	INC z:<DATA_LEN ; Translate +1 MVN values to DMA count values
 	TYA
+	STA f:$002181 ; WMADDL/M
 	ADC z:<DATA_LEN
 	TAY
 	SEP #PROC_FLAGS::ACCUM8
 DMA_LOOP:
 ; Load the current PPU H-counter. Requires a dummy-read plus a double-read.
-	LDA a:$2137 ; SLHV
-	LDA a:$213C ; OPHCT
-	XBA
-	LDA a:$213C ; OPHCT
-	LSR
-; Manually clear A - 2nd load gets open-bus values in high bits
-; This is unimportant when dealing with 8-bit values, but when we switch to 16-bit mode
-; below, we want A to be only 8 bits still. The compare *must* be 16-bits since DATA_LEN
-; can be larger than 256.
-	LDA $0
-	XBA
-	ROR ; We've shifted a 9-bit value to an 8-bit value
+; We are only loading the low 8 bits. This means the section of the scanline that is
+; primarily in hblank gets "mapped" into the part at the beginning. This is safe because
+; the values for the front of the scanline are strictly smaller, so we never risk
+; overshooting our DMA. It also doesn't end up being inefficient for complicated emergent
+; reasons of timing, and it lets us save slow instructions here.
+	LDA f:$00213F ; STAT78 - Reset OPHCT flipflop
+	LDA f:$002137 ; SLHV
+	LDA f:$00213C ; OPHCT
 	STA z:<TABLE_ADDR
 	LDA [<TABLE_ADDR]
 	BEQ DMA_LOOP ; If we would hit hblank, delay by trying again
 	REP #PROC_FLAGS::ACCUM8
+	AND #$00FF
 	CMP z:<DATA_LEN
 	BCC SKIP_DATA_LEN
 	LDA z:<DATA_LEN
@@ -124,16 +117,16 @@ SKIP_DATA_LEN:
 	STA z:<DATA_LEN
 	SEP #PROC_FLAGS::ACCUM8
 	LDA #$40  ; MDMAEN = bit 6
-	STA a:MDMAEN
+	STA f:MDMAEN
 ; A few cycles run before DMA activates, but we aren't messing with anything
 ; critical in those cycles here.
 ; c is the value from SBC. c=1 iff old DATA_LEN <= transfer size, and since
 ; DATA_LEN is always >= transfer size, this means c=1 iff we are done.
 	BCC DMA_LOOP
 	LDA z:<$4360 ; DMAP6, still will be 0 if LITERAL
-	BNE DECOMP_LOOP_NO_LOAD ; We already incremented X
+	BNE READ_CMD ; We already incremented X
 	LDX z:<$4362 ; A1T6L/H, DMA adjusted address for us
-	BRA DECOMP_LOOP_NO_LOAD
+	BRA READ_CMD ; We haven't pushed B along the DO_DMA branch, so we don't pull it
 ; The main loop starts here, so that conditional branch targets can make use of the full [-128,127] range
 ; by also jumping *before* this point.
 DECOMP_LOOP:
@@ -158,6 +151,7 @@ CMD_SHORT:
 	AND #$E0
 	STA z:<FAST_CMD
 	LDA a:$00,X
+	BEQ ONE_LITERAL_BYTE
 	INX
 	AND #$001F
 ; The actual number of bytes to operate on is the operand +1, but MVN adds
@@ -166,15 +160,44 @@ CMD_SHORT:
 	STA z:<DATA_LEN
 	STZ z:<DATA_LEN+1
 DECODE_CMD:
-	PHB
 	LDA z:<FAST_CMD
 	BMI CMD_HIGH
 CMD_LOW:
 .A8
 	CMP #$40
 	BCC DO_DMA
+	PHB
 	BEQ RLE16
 	JMP SEQ
+EXIT:
+	REP #PROC_FLAGS::ACCUM8
+	PLB
+	PLD
+	RTL
+RLE16:
+	REP #PROC_FLAGS::ACCUM8
+	LDA a:$00,X
+	INX
+	INX
+	STX z:<FAST_TMP
+	TYX
+	STA [<DATA_DST],Y
+; Extra increments for the rle16 case
+	INY
+	INY
+	LDA z:<DATA_LEN
+; If we are only RLE'ing 2 bytes, we have to stop now. MVN would overflow and write 64k.
+	BEQ DECOMP_LOOP
+	ASL
+	DEC
+	JML MVN_ADDR
+ONE_LITERAL_BYTE:
+	INX
+	LDA a:$00,X
+	INX
+	STA [<DATA_DST],Y
+	INY
+	BRA READ_CMD ; Haven't even pushed B
 CMD_LONG:
 .A8
 	CMP #$FF
@@ -191,30 +214,10 @@ CMD_LONG:
 	LDA a:$00,X
 	INX
 	STA z:<DATA_LEN
-	BRA DECODE_CMD
-EXIT:
-	REP #PROC_FLAGS::ACCUM8
-	PLB
-	PLD
-	RTL
-RLE16:
-	REP #PROC_FLAGS::ACCUM8
-	LDA a:$00,X
-	STA [<DATA_DST],Y
-	INX
-	INX
-	STX z:<FAST_TMP
-	TYX
-; Extra increments for the rle16 case
-	INY
-	INY
-	LDA z:<DATA_LEN
-; If we are only RLE'ing 2 bytes, we have to stop now. MVN would overflow and write 64k.
-	BEQ DECOMP_LOOP
-	ASL
-	DEC
-	JML MVN_ADDR
+	LDA z:<FAST_CMD
+	BPL CMD_LOW
 CMD_HIGH:
+	PHB
 	REP #PROC_FLAGS::ACCUM8 | PROC_FLAGS::CARRY
 	LDA a:$00,X
 ; Offset is stored big-endian, which is very annoying
@@ -250,7 +253,8 @@ CMD_HIGH:
 	SEP #PROC_FLAGS::ACCUM8
 	LDA z:<FAST_CMD
 	CMP #$00C0
-	BNE BREF_ROT
+	BEQ BREF_REV
+	JMP BREF_ROT
 BREF_REV:
 .A8
 	LDA a:$00,X
@@ -264,32 +268,10 @@ BREF:
 	REP #PROC_FLAGS::ACCUM8
 	LDA z:<DATA_LEN
 	JML MVN_ADDR
-BREF_ROT:
-.A8
-; This normally is set up for the DMA table, we repoint it in the rare times
-; we need it for rotate
-	LDA #>DECOMP_ROT_TABLE
-	STA z:<TABLE_ADDR+1
-BREF_ROT_LOOP:
-	LDA a:$00,X
-	STA z:<TABLE_ADDR
-	LDA [<TABLE_ADDR]
-	STA a:$00,Y
-	INX
-; We compare vs the preincrement value, because DATA_LEN is storing the last
-; address instead of one-past-the-end. But we can't use the z flag, because
-; INY overwrites it - so we use c instead, which switches from 0 to 1 once Y
-; equals DATA_LEN.
-	CPY z:<DATA_LEN
-	INY
-	BCC BREF_ROT_LOOP
-	LDA #>DECOMP_ROT_TABLE
-	STA z:<TABLE_ADDR+1
-	JMP DECOMP_LOOP_NO_SEP
 .ENDPROC
 
 ; Space out the function so that other functions end in the same spots
-.RES $16
+.RES $21
 
 ; Not actually decomp at all
 DECOMP_ENTRY2:

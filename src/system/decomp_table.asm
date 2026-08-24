@@ -64,6 +64,30 @@ SEQ_LOOP:
 	DEX
 	BNE SEQ_LOOP
 	JMP DECOMP_LOOP_NO_SEP
+; This code is rarely executed, and can be pulled out of the main body in
+; order to make the main code fit.
+BREF_ROT:
+.A8
+; This normally is set up for the DMA table, we repoint it in the rare times
+; we need it for rotate
+	LDA #>DECOMP_ROT_TABLE
+	STA z:<TABLE_ADDR+1
+BREF_ROT_LOOP:
+	LDA a:$00,X
+	STA z:<TABLE_ADDR
+	LDA [<TABLE_ADDR]
+	STA a:$00,Y
+	INX
+; We compare vs the preincrement value, because DATA_LEN is storing the last
+; address instead of one-past-the-end. But we can't use the z flag, because
+; INY overwrites it - so we use c instead, which switches from 0 to 1 once Y
+; equals DATA_LEN.
+	CPY z:<DATA_LEN
+	INY
+	BCC BREF_ROT_LOOP
+	LDA #>DECOMP_TIMING_TABLE
+	STA z:<TABLE_ADDR+1
+	JMP DECOMP_LOOP_NO_SEP
 
 ; Table for bitrotated lookups. *Must* be page-aligned, or else the lookup
 ; code gets more complicated.
@@ -77,7 +101,20 @@ bvalue .SET 0
 
 .align $100
 DECOMP_TIMING_TABLE:
-.REPEAT 170
-  .BYT 120
+count .SET 0
+; This accounts for the lag between latching the value and starting the DMA,
+; as well as the positioning of the memory refresh and HDMA intervals.
+; All of this is determined by looking at timing windows, not calculated by hand.
+.REPEAT $100
+  .IF count <= 145     ; This particular breakpoint is for the ram refresh timing window
+    bvalue .SET (164 - count)/2
+  .ELSEIF count <= 170 ; Post-ram refresh, the numbers are slightly different
+    bvalue .SET (170 - count)/2
+  .ELSEIF count <= 178 ; A small deadspot to avoid HDMA
+    bvalue .SET 0
+  .ELSE                ; Large values wrap around and have almost the whole window to work with
+    bvalue .SET (314 + 179 - count)/2
+  .ENDIF
+  .BYT bvalue
+  count .SET count + 1
 .ENDREPEAT
-
