@@ -2,11 +2,12 @@
 // routine - it speeds it up about 2x in terms of master clocks.
 // For safety, add the following to used-ranges.yml:
 //
-// - (0x04FE00, 0x04FF37)
+// - (0x04FD4B, 0x04FFFF)
 //
-// Otherwise, this should be a drop-in replacement without needed any other adjustments.
+// Otherwise, this should be a drop-in replacement without needing any other adjustments.
 
 // The source code for this lives at https://github.com/d0sboots/ebsrc/tree/decomp_speed
+// Look there for comments, explanation, and how this works.
 // This ccscript version just has the compiled machine code.
 
 // Copyright 2026 David Walker
@@ -31,48 +32,72 @@
 
 // Replace the main definition of the decompression function.
 ROM[0xC41A9E] = {
-  "[4c 00 ff e2 20 a6 08 ab bd 00 00 c9 e0 b0 16 29]"
-  "[e0 85 07 bd 00 00 e8 29 1f 85 13 64 14 8b a5 07]"
-  "[10 23 4c 3e 1b c9 ff f0 17 0a 0a 0a 29 e0 85 07]"
-  "[bd 00 00 e8 29 03 85 14 bd 00 00 e8 85 13 80 dd]"
-  "[c2 20 ab 2b 6b f0 27 c9 40 90 06 f0 02 80 3e c2]"
-  "[20 bd 00 00 97 10 e8 86 08 bb 90 03 e6 08 c8 c8]"
-  "[c2 20 a5 13 f0 9d 90 01 0a 3a 5c 15 43 00 a5 2b]"
-  "[85 17 c2 20 a9 1d 1b 85 19 a5 13 5c 15 43 00 a9]"
-  "[a1 1a 85 19 e2 20 a5 12 85 17 4c a5 1a bd 00 00]"
-  "[e8 86 08 a6 13 e8 97 10 c8 1a ca d0 f9 4c a3 1a]"
-  "[c2 21 bd 00 00 eb 65 0a e8 e8 86 08 aa e2 20 a5]"
-  "[07 c9 80 f0 19 c9 e0 f0 15 a5 12 48 ab c2 20 98]"
-  "[65 13 85 13 e2 20 a5 07 c9 c0 f0 2d 80 08 c2 20]"
-  "[a5 13 5c 15 43 00 a9 c4 85 12 a9 fe 85 11 bd 00]"
-  "[00 85 10 a7 10 99 00 00 e8 c4 13 c8 90 f0 64 10]"
-  "[64 11 a5 16 85 12 4c a3 1a bd 00 00 99 00 00 ca]"
-  "[c4 13 c8 90 f4 4c a3 1a 00 00 00 00 00 00 00 00]"
+  "[4c 4b fd c9 20 86 62 90 03 a9 08 e8 85 60 c2 21]"
+  "[e6 70 98 8f 81 21 00 65 70 a8 e2 20 af 3f 21 00]"
+  "[af 37 21 00 af 3c 21 00 85 72 a7 72 f0 ee c2 20]"
+  "[29 ff 00 c5 70 90 02 a5 70 85 65 38 e5 70 49 ff]"
+  "[ff 1a 85 70 e2 20 a9 40 8f 0b 42 00 90 ce a5 60]"
+  "[d0 09 a6 62 80 05 e2 20 a6 08 ab bd 00 00 c9 e0]"
+  "[b0 45 29 e0 85 07 bd 00 00 f0 32 e8 29 1f 85 70]"
+  "[64 71 a5 07 30 4e c9 40 90 89 8b f0 08 4c 91 fd]"
+  "[c2 20 ab 2b 6b c2 20 bd 00 00 e8 e8 86 08 bb 97]"
+  "[68 c8 c8 a5 70 f0 bf 0a 3a 5c 75 43 00 e8 bd 00]"
+  "[00 e8 97 68 c8 80 b4 c9 ff f0 d5 0a 0a 0a 29 e0]"
+  "[85 07 bd 00 00 e8 29 03 85 71 bd 00 00 e8 85 70]"
+  "[a5 07 10 b2 8b c2 21 bd 00 00 eb 65 0a e8 e8 86]"
+  "[08 aa e2 20 a5 07 c9 80 f0 29 c9 e0 f0 25 a5 6a]"
+  "[48 ab c2 20 98 65 70 85 70 e2 20 a5 07 c9 c0 f0]"
+  "[03 4c a4 fd bd 00 00 99 00 00 ca c4 70 c8 90 f4]"
+  "[4c f6 1a c2 20 a5 70 5c 75 43 00 00 00 00 00 00]"
   "[00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00]"
   "[00 00 00 00 00 00 00 00 00 00 00 00]"
 }
 
-// Add a 256-byte lookup table, and some additional initialization code that
+// Add two 256-byte lookup tables, and some additional code that
 // didn't fit in the main routine.
-ROM[0xC4FE00] = {
-  "[00 80 40 c0 20 a0 60 e0 10 90 50 d0 30 b0 70 f0]"
-  "[08 88 48 c8 28 a8 68 e8 18 98 58 d8 38 b8 78 f8]"
-  "[04 84 44 c4 24 a4 64 e4 14 94 54 d4 34 b4 74 f4]"
-  "[0c 8c 4c cc 2c ac 6c ec 1c 9c 5c dc 3c bc 7c fc]"
-  "[02 82 42 c2 22 a2 62 e2 12 92 52 d2 32 b2 72 f2]"
-  "[0a 8a 4a ca 2a aa 6a ea 1a 9a 5a da 3a ba 7a fa]"
-  "[06 86 46 c6 26 a6 66 e6 16 96 56 d6 36 b6 76 f6]"
-  "[0e 8e 4e ce 2e ae 6e ee 1e 9e 5e de 3e be 7e fe]"
-  "[01 81 41 c1 21 a1 61 e1 11 91 51 d1 31 b1 71 f1]"
-  "[09 89 49 c9 29 a9 69 e9 19 99 59 d9 39 b9 79 f9]"
-  "[05 85 45 c5 25 a5 65 e5 15 95 55 d5 35 b5 75 f5]"
-  "[0d 8d 4d cd 2d ad 6d ed 1d 9d 5d dd 3d bd 7d fd]"
-  "[03 83 43 c3 23 a3 63 e3 13 93 53 d3 33 b3 73 f3]"
-  "[0b 8b 4b cb 2b ab 6b eb 1b 9b 5b db 3b bb 7b fb]"
-  "[07 87 47 c7 27 a7 67 e7 17 97 57 d7 37 b7 77 f7]"
-  "[0f 8f 4f cf 2f af 6f ef 1f 9f 5f df 3f bf 7f ff]"
-  "[0b 8b e2 20 a5 10 48 8f 2b 43 00 a6 0e a4 12 a5]"
-  "[14 f4 00 43 2b 86 08 84 0a 85 12 85 17 85 16 a9]"
-  "[54 85 15 a9 5c 85 18 a9 c4 85 1b c2 20 a9 a1 1a]"
-  "[85 19 64 10 4c a1 1a]"
+ROM[0xC4FD4B] = {
+  "[0b 8b e2 20 a5 10 48 a6 0e a4 12 a5 14 f4 00 43]"
+  "[2b 84 0a 85 6a 85 77 85 76 8f 83 21 00 a9 54 85]"
+  "[75 a9 5c 85 78 a9 c4 85 7b a9 80 85 61 a3 01 85]"
+  "[6b 85 64 c2 20 a9 f4 1a 85 79 64 68 a9 ff c4 85]"
+  "[73 e2 20 4c f8 1a bd 00 00 e8 86 08 a6 70 e8 97]"
+  "[68 c8 1a ca d0 f9 4c f6 1a a9 fe 85 73 bd 00 00]"
+  "[85 72 a7 72 99 00 00 e8 c4 70 c8 90 f0 a9 ff 85]"
+  "[73 4c f6 1a 00 00 00 00 00 00 00 00 00 00 00 00]"
+  "[00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00]"
+  "[00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00]"
+  "[00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00]"
+  "[00 00 00 00 00 00 80 40 c0 20 a0 60 e0 10 90 50]"
+  "[d0 30 b0 70 f0 08 88 48 c8 28 a8 68 e8 18 98 58]"
+  "[d8 38 b8 78 f8 04 84 44 c4 24 a4 64 e4 14 94 54]"
+  "[d4 34 b4 74 f4 0c 8c 4c cc 2c ac 6c ec 1c 9c 5c]"
+  "[dc 3c bc 7c fc 02 82 42 c2 22 a2 62 e2 12 92 52]"
+  "[d2 32 b2 72 f2 0a 8a 4a ca 2a aa 6a ea 1a 9a 5a]"
+  "[da 3a ba 7a fa 06 86 46 c6 26 a6 66 e6 16 96 56]"
+  "[d6 36 b6 76 f6 0e 8e 4e ce 2e ae 6e ee 1e 9e 5e]"
+  "[de 3e be 7e fe 01 81 41 c1 21 a1 61 e1 11 91 51]"
+  "[d1 31 b1 71 f1 09 89 49 c9 29 a9 69 e9 19 99 59]"
+  "[d9 39 b9 79 f9 05 85 45 c5 25 a5 65 e5 15 95 55]"
+  "[d5 35 b5 75 f5 0d 8d 4d cd 2d ad 6d ed 1d 9d 5d]"
+  "[dd 3d bd 7d fd 03 83 43 c3 23 a3 63 e3 13 93 53]"
+  "[d3 33 b3 73 f3 0b 8b 4b cb 2b ab 6b eb 1b 9b 5b]"
+  "[db 3b bb 7b fb 07 87 47 c7 27 a7 67 e7 17 97 57]"
+  "[d7 37 b7 77 f7 0f 8f 4f cf 2f af 6f ef 1f 9f 5f]"
+  "[df 3f bf 7f ff 52 51 51 50 50 4f 4f 4e 4e 4d 4d]"
+  "[4c 4c 4b 4b 4a 4a 49 49 48 48 47 47 46 46 45 45]"
+  "[44 44 43 43 42 42 41 41 40 40 3f 3f 3e 3e 3d 3d]"
+  "[3c 3c 3b 3b 3a 3a 39 39 38 38 37 37 36 36 35 35]"
+  "[34 34 33 33 32 32 31 31 30 30 2f 2f 2e 2e 2d 2d]"
+  "[2c 2c 2b 2b 2a 2a 29 29 28 28 27 27 26 26 25 25]"
+  "[24 24 23 23 22 22 21 21 20 20 1f 1f 1e 1e 1d 1d]"
+  "[1c 1c 1b 1b 1a 1a 19 19 18 18 17 17 16 16 15 15]"
+  "[14 14 13 13 12 12 11 11 10 10 0f 0f 0e 0e 0d 0d]"
+  "[0c 0c 0b 0b 0a 0a 09 0c 0b 0b 0a 0a 09 09 08 08]"
+  "[07 07 06 06 05 05 04 04 03 03 02 02 01 01 00 00]"
+  "[00 00 00 00 00 00 00 00 9d 9c 9c 9b 9b 9a 9a 99]"
+  "[99 98 98 97 97 96 96 95 95 94 94 93 93 92 92 91]"
+  "[91 90 90 8f 8f 8e 8e 8d 8d 8c 8c 8b 8b 8a 8a 89]"
+  "[89 88 88 87 87 86 86 85 85 84 84 83 83 82 82 81]"
+  "[81 80 80 7f 7f 7e 7e 7d 7d 7c 7c 7b 7b 7a 7a 79]"
+  "[79 78 78 77 77]"
 }
