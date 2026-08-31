@@ -1334,8 +1334,8 @@ snes_header:
 	.BYTE $01		; USA
 	.BYTE $33		; Licensee Code
 	.BYTE $00		; Version
-	.WORD $E0B9	; Checksum Complement
-	.WORD $1F46	; Checksum
+	.WORD $E391	; Checksum Complement
+	.WORD $1C6E	; Checksum
 	.WORD $0000	; Unused
 	.WORD $0000	; Unused
 	.WORD $5FFF	; Native-mode COP
