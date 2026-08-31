@@ -19,7 +19,7 @@
 ; push/pull in a judicious place.
 ;
 ; ===== MEMORY SAFETY =====
-; We use the DMA0/DMA6/DMA7 registers for fastrom local storage. Also WMADD[LMH] for DMA access.
+; We use the DMA0/DMA3/DMA7 registers for fastrom local storage. Also WMADD[LMH] for DMA access.
 ; TL;DR: Either don't use these in your code (satisfied by default for stock Earthbound), OR
 ; don't use them in code that calls DECOMP *AND* don't use them during NMI (i.e. via SCHEDULE_OVERWORLD_TASK)
 ; ===== END MEMORY SAFETY =====
@@ -29,7 +29,7 @@
 ; We are only using the HDMA part of the DMA0 registers, which never get touched.
 ;
 ; In standard earthbound, DMA1 is used in COPY_TO_VRAM for normal transfers, and
-; DMA2/DMA4/DMA5 are used for HDMA. DMA6 and DMA7 are completely unused, and
+; DMA2/DMA4/DMA5/DMA6 are used for HDMA. DMA3 and DMA7 are completely unused, and
 ; thus normally safe. Since DECOMP is a leaf function, it would still be safe
 ; for homebrew code to use them, as long as it didn't call DECOMP itself (this
 ; could unexpectedly corrupt the DMA registers), or use them during NMI and
@@ -41,8 +41,8 @@
 .DEFINE FAST_CMD $4307 ; DASB0 - 1 byte - in DMA0, but this byte isn't used for regular DMA
 .DEFINE FAST_TMP $4308 ; A2A0L - 2 bytes - in DMA0, but these bytes aren't used for regular DMA
 .DEFINE DATA_DST_ORIG $430A ; NTRL0 - 2 bytes - in DMA0, but these bytes aren't used for regular DMA
-.DEFINE DATA_DST $4368 ; A2A6L - 3 bytes - HDMA in DMA6, will be undisturbed
-.DEFINE DATA_SRC_BANK $436B ; 1 byte - unused space in DMA6
+.DEFINE DATA_DST $4338 ; A2A3L - 3 bytes - HDMA in DMA3, will be undisturbed
+.DEFINE DATA_SRC_BANK $433B ; 1 byte - unused space in DMA3
 .DEFINE DATA_LEN $4370 ; DMAP7 - 2 bytes
 .DEFINE TABLE_ADDR $4372 ; A1T7L - 3 bytes
 .DEFINE MVN_ADDR $4375 ; DAS7L - 7 contiguous bytes to execute a payload
@@ -68,7 +68,7 @@ DO_DMA:
 ; is offloaded to a lookup table.
 ; Used to distinguish between RLE8 (c=1) and LITERAL (c=0)
 	CMP #$20
-	STX z:<$4362 ; A1T6L/H
+	STX z:<$4332 ; A1T3L/H
 ; DMAP of 0 is Transfer A->B, Increment A-Bus, 1-byte transfer, which is
 ; what we want for LITERAL. For RLE8, we need $08 which is A-Bus fixed.
 ; This takes advantage of the fact that a=0 when c=0.
@@ -76,7 +76,7 @@ DO_DMA:
 	LDA #$08
 	INX
 DMA_SETUP:
-	STA z:<$4360 ; DMAP6
+	STA z:<$4330 ; DMAP3
 ; We handle adjusting the Y register at the top here instead of the bottom, because
 ; it is more convenient to do so when the carry flag is clear, and along with another
 ; required 16-bit op.
@@ -106,7 +106,7 @@ DMA_LOOP:
 	BCC SKIP_DATA_LEN
 	LDA z:<DATA_LEN
 SKIP_DATA_LEN:
-	STA z:<$4365 ; DAS6L/H
+	STA z:<$4335 ; DAS3L/H
 ; SBC is accumulator - data, but we need data - accumulator, which means
 ; negating accumulator ourselves. We could get rid of the INC by using CLC,
 ; but then the carry flag wouldn't be set correctly below.
@@ -116,16 +116,16 @@ SKIP_DATA_LEN:
 	INC
 	STA z:<DATA_LEN
 	SEP #PROC_FLAGS::ACCUM8
-	LDA #$40  ; MDMAEN = bit 6
+	LDA #$08  ; MDMAEN = bit 3
 	STA f:MDMAEN
 ; A few cycles run before DMA activates, but we aren't messing with anything
 ; critical in those cycles here.
 ; c is the value from SBC. c=1 iff old DATA_LEN <= transfer size, and since
 ; DATA_LEN is always >= transfer size, this means c=1 iff we are done.
 	BCC DMA_LOOP
-	LDA z:<$4360 ; DMAP6, still will be 0 if LITERAL
+	LDA z:<$4330 ; DMAP3, still will be 0 if LITERAL
 	BNE READ_CMD ; We already incremented X
-	LDX z:<$4362 ; A1T6L/H, DMA adjusted address for us
+	LDX z:<$4332 ; A1T3L/H, DMA adjusted address for us
 	BRA READ_CMD ; We haven't pushed B along the DO_DMA branch, so we don't pull it
 ; The main loop starts here, so that conditional branch targets can make use of the full [-128,127] range
 ; by also jumping *before* this point.
